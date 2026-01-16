@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Lumina Studio | Premium Web Camera</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lucide/0.263.0/lucide.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+
+        :root {
+            --glass: rgba(255, 255, 255, 0.1);
+            --glass-border: rgba(255, 255, 255, 0.2);
+            --accent: #ffffff;
+            --safe-area-top: env(safe-area-inset-top);
+            --safe-area-bottom: env(safe-area-inset-bottom);
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #000;
+            color: white;
+            overflow: hidden;
+            height: 100vh;
+            width: 100vw;
+            touch-action: none;
+        }
+
+        .glass {
+            background: var(--glass);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+        }
+
+        .shutter-btn {
+            position: relative;
+            transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        .shutter-btn:active {
+            transform: scale(0.9);
+        }
+
+        .shutter-inner {
+            width: 60px;
+            height: 60px;
+            background: white;
+            border-radius: 50%;
+            border: 4px solid rgba(0,0,0,0.1);
+        }
+
+        .mode-active {
+            color: white;
+            font-weight: 600;
+        }
+
+        .mode-inactive {
+            color: rgba(255,255,255,0.4);
+        }
+
+        #video-canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .filter-scroll::-webkit-scrollbar { display: none; }
+
+        .ios-toast {
+            animation: slideDown 0.3s ease forwards, fadeOut 0.3s ease 2s forwards;
+        }
+
+        @keyframes slideDown {
+            from { transform: translate(-50%, -20px); opacity: 0; }
+            to { transform: translate(-50%, 20px); opacity: 1; }
+        }
+
+        @keyframes fadeOut {
+            to { opacity: 0; }
+        }
+
+        .grid-layer {
+            pointer-events: none;
+            position: absolute;
+            inset: 0;
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            grid-template-rows: 1fr 1fr 1fr;
+            opacity: 0.3;
+        }
+        .grid-layer div { border: 0.5px solid rgba(255,255,255,0.5); }
+
+        .rec-dot {
+            width: 10px;
+            height: 10px;
+            background: #ff3b30;
+            border-radius: 50%;
+            animation: blink 1s infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+        
+        .shutter-flash {
+            position: absolute;
+            inset: 0;
+            background: white;
+            z-index: 100;
+            pointer-events: none;
+            opacity: 0;
+        }
+
+        @keyframes flash {
+            0% { opacity: 1; }
+            100% { opacity: 0; }
+        }
+
+        .loader {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #fff;
+            border-bottom-color: transparent;
+            border-radius: 50%;
+            display: inline-block;
+            animation: rotation 1s linear infinite;
+        }
+
+        @keyframes rotation {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Camera Viewport -->
+    <main class="relative h-screen w-screen bg-black flex items-center justify-center">
+        <video id="camera-feed" autoplay playsinline muted class="hidden"></video>
+        <canvas id="video-canvas"></canvas>
+        <div id="shutter-flash" class="shutter-flash"></div>
+
+        <!-- Overlays -->
+        <div id="grid-overlay" class="grid-layer hidden">
+            <div></div><div></div><div></div>
+            <div></div><div></div><div></div>
+            <div></div><div></div><div></div>
+        </div>
+
+        <!-- Top Bar -->
+        <header class="absolute top-0 left-0 right-0 p-4 flex justify-between items-start z-20" style="padding-top: calc(1rem + var(--safe-area-top))">
+            <div class="flex gap-4">
+                <button onclick="toggleSetting('grid')" class="glass p-2 rounded-full text-white/80 active:bg-white/20 transition-colors">
+                    <i data-lucide="grid-3x3" class="w-5 h-5"></i>
+                </button>
+                <button onclick="toggleSetting('timer')" id="timer-btn" class="glass p-2 rounded-full text-white/80 active:bg-white/20 transition-colors">
+                    <i data-lucide="timer" class="w-5 h-5"></i>
+                </button>
+                <button onclick="analyzeScene()" id="ai-analyze-btn" class="glass px-3 py-2 rounded-full text-white flex items-center gap-2 border border-purple-500/50">
+                    <i data-lucide="sparkles" class="w-4 h-4 text-purple-400"></i>
+                    <span class="text-[10px] font-bold uppercase tracking-widest">✨ Scene AI</span>
+                </button>
+            </div>
+            
+            <div id="status-indicators" class="flex flex-col items-end gap-2">
+                <div id="rec-status" class="hidden glass px-3 py-1 rounded-full flex items-center gap-2">
+                    <div class="rec-dot"></div>
+                    <span class="text-xs font-mono uppercase tracking-widest" id="rec-time">00:00</span>
+                </div>
+                <div class="glass px-2 py-1 rounded text-[10px] font-mono opacity-60" id="perf-monitor">-- FPS</div>
+            </div>
+
+            <div class="flex gap-4">
+                <button onclick="switchCamera()" class="glass p-2 rounded-full text-white/80">
+                    <i data-lucide="refresh-cw" class="w-5 h-5"></i>
+                </button>
+                <button onclick="togglePanel('pro-settings')" class="glass p-2 rounded-full text-white/80">
+                    <i data-lucide="sliders" class="w-5 h-5"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- Zoom Slider -->
+        <div class="absolute right-6 top-1/2 -translate-y-1/2 flex flex-col items-center gap-4 z-20">
+            <span class="text-[10px] font-bold opacity-50">3X</span>
+            <div class="h-40 w-1 glass rounded-full relative overflow-hidden">
+                <input type="range" id="zoom-range" min="1" max="3" step="0.1" value="1" 
+                    class="absolute inset-0 opacity-0 cursor-pointer" style="writing-mode: bt-lr; -webkit-appearance: slider-vertical;">
+                <div id="zoom-track" class="absolute bottom-0 left-0 right-0 bg-white" style="height: 0%"></div>
+            </div>
+            <span class="text-[10px] font-bold opacity-50" id="zoom-label">1.0X</span>
+        </div>
+
+        <!-- AI Suggestions Bar -->
+        <div id="ai-suggestions" class="absolute top-24 inset-x-4 z-20 pointer-events-none opacity-0 transition-opacity duration-500">
+            <div class="glass p-4 rounded-2xl border-purple-500/30">
+                <div class="flex items-center gap-2 mb-1">
+                    <i data-lucide="brain-circuit" class="w-4 h-4 text-purple-400"></i>
+                    <span class="text-[10px] uppercase font-bold text-purple-200">✨ AI Recommendation</span>
+                </div>
+                <p id="ai-suggestion-text" class="text-xs text-white/90 leading-relaxed italic"></p>
+            </div>
+        </div>
+
+        <!-- Control Bottom Panel -->
+        <footer class="absolute bottom-0 left-0 right-0 z-20 flex flex-col items-center" style="padding-bottom: calc(1.5rem + var(--safe-area-bottom))">
+            
+            <!-- Filter Strip -->
+            <div class="w-full filter-scroll overflow-x-auto whitespace-nowrap px-8 mb-6 flex gap-4 scroll-smooth">
+                <button onclick="setFilter('none')" class="inline-flex flex-col items-center gap-1 group">
+                    <div class="w-12 h-12 rounded-full border-2 border-white/50 group-hover:border-white overflow-hidden bg-zinc-800"></div>
+                    <span class="text-[10px] uppercase tracking-tighter opacity-50">Original</span>
+                </button>
+                <button onclick="setFilter('vivid')" class="inline-flex flex-col items-center gap-1 group">
+                    <div class="w-12 h-12 rounded-full border-2 border-transparent group-hover:border-white overflow-hidden bg-blue-500"></div>
+                    <span class="text-[10px] uppercase tracking-tighter opacity-50">Vivid</span>
+                </button>
+                <button onclick="setFilter('noir')" class="inline-flex flex-col items-center gap-1 group">
+                    <div class="w-12 h-12 rounded-full border-2 border-transparent group-hover:border-white overflow-hidden bg-zinc-400"></div>
+                    <span class="text-[10px] uppercase tracking-tighter opacity-50">Noir</span>
+                </button>
+                <button onclick="setFilter('sepia')" class="inline-flex flex-col items-center gap-1 group">
+                    <div class="w-12 h-12 rounded-full border-2 border-transparent group-hover:border-white overflow-hidden bg-orange-200"></div>
+                    <span class="text-[10px] uppercase tracking-tighter opacity-50">Cinema</span>
+                </button>
+                <button onclick="remixPhoto()" class="inline-flex flex-col items-center gap-1 group">
+                    <div class="w-12 h-12 rounded-full border-2 border-purple-500/50 group-hover:border-white overflow-hidden bg-gradient-to-tr from-purple-600 to-blue-500 flex items-center justify-center">
+                        <i data-lucide="wand-2" class="w-6 h-6"></i>
+                    </div>
+                    <span class="text-[10px] uppercase tracking-tighter text-purple-400 font-bold">✨ AI Remix</span>
+                </button>
+            </div>
+
+            <!-- Mode Selector -->
+            <div class="flex gap-8 mb-6 text-xs uppercase tracking-widest font-medium">
+                <button onclick="setMode('PHOTO')" id="mode-photo" class="mode-active">Photo</button>
+                <button onclick="setMode('VIDEO')" id="mode-video" class="mode-inactive">Video</button>
+                <button onclick="setMode('PRO')" id="mode-pro" class="mode-inactive">Pro</button>
+            </div>
+
+            <!-- Main Shutter Area -->
+            <div class="flex items-center justify-center gap-10">
+                <button onclick="openGallery()" class="w-10 h-10 rounded-lg glass flex items-center justify-center overflow-hidden">
+                    <div id="gallery-preview" class="w-full h-full bg-white/10 flex items-center justify-center">
+                        <i data-lucide="image" class="w-5 h-5 opacity-40"></i>
+                    </div>
+                </button>
+
+                <button id="shutter" onclick="handleCapture()" class="shutter-btn w-20 h-20 rounded-full border-4 border-white/30 flex items-center justify-center bg-transparent">
+                    <div id="shutter-inner" class="shutter-inner"></div>
+                </button>
+
+                <button onclick="togglePanel('pro-settings')" class="w-10 h-10 rounded-full glass flex items-center justify-center">
+                    <i data-lucide="sparkles" class="w-5 h-5"></i>
+                </button>
+            </div>
+        </footer>
+
+        <!-- Pro Settings Modal -->
+        <div id="pro-settings" class="absolute inset-x-0 bottom-0 glass rounded-t-[32px] p-8 translate-y-full transition-transform duration-500 z-30">
+            <div class="w-12 h-1.5 bg-white/20 rounded-full mx-auto mb-8 cursor-pointer" onclick="togglePanel('pro-settings')"></div>
+            <h3 class="text-sm font-bold uppercase tracking-widest mb-6 opacity-60">Manual Controls</h3>
+            
+            <div class="grid grid-cols-1 gap-6">
+                <div class="space-y-2">
+                    <div class="flex justify-between text-[10px] uppercase font-bold">
+                        <span>Exposure</span>
+                        <span id="val-brightness">0</span>
+                    </div>
+                    <input type="range" id="slider-brightness" min="-100" max="100" value="0" class="w-full accent-white opacity-60" oninput="updatePro('brightness', this.value)">
+                </div>
+                <div class="space-y-2">
+                    <div class="flex justify-between text-[10px] uppercase font-bold">
+                        <span>Contrast</span>
+                        <span id="val-contrast">0</span>
+                    </div>
+                    <input type="range" id="slider-contrast" min="-100" max="100" value="0" class="w-full accent-white opacity-60" oninput="updatePro('contrast', this.value)">
+                </div>
+                <div class="space-y-2">
+                    <div class="flex justify-between text-[10px] uppercase font-bold">
+                        <span>Saturation</span>
+                        <span id="val-saturate">0</span>
+                    </div>
+                    <input type="range" id="slider-saturate" min="-100" max="100" value="0" class="w-full accent-white opacity-60" oninput="updatePro('saturate', this.value)">
+                </div>
+                <div class="space-y-2">
+                    <div class="flex justify-between text-[10px] uppercase font-bold">
+                        <span>Warmth</span>
+                        <span id="val-hue">0</span>
+                    </div>
+                    <input type="range" id="slider-hue" min="-100" max="100" value="0" class="w-full accent-white opacity-60" oninput="updatePro('hue', this.value)">
+                </div>
+            </div>
+
+            <button onclick="resetPro()" class="mt-8 w-full py-3 glass rounded-xl text-xs uppercase font-bold tracking-widest">Reset All</button>
+        </div>
+    </main>
+
+    <div id="toast-container" class="fixed top-10 left-1/2 -translate-x-1/2 z-[100] pointer-events-none"></div>
+
+    <script>
+        const apiKey = "";
+        const video = document.getElementById('camera-feed');
+        const canvas = document.getElementById('video-canvas');
+        const ctx = canvas.getContext('2d', { alpha: false });
+        const shutterInner = document.getElementById('shutter-inner');
+        
+        let state = {
+            currentMode: 'PHOTO', 
+            isRecording: false,
+            activeCamera: 'environment', 
+            stream: null,
+            filter: 'none',
+            zoom: 1,
+            timer: 0,
+            pro: { brightness: 100, contrast: 100, saturate: 100, hue: 0 },
+            grid: false,
+            lastPhoto: null
+        };
+
+        let mediaRecorder, recordedChunks = [], startTime, frameCount = 0, lastTime = performance.now();
+
+        function refreshIcons() {
+            if (typeof lucide !== 'undefined' && lucide.createIcons) lucide.createIcons();
+        }
+
+        async function initCamera() {
+            try {
+                if (state.stream) state.stream.getTracks().forEach(track => track.stop());
+                const constraints = {
+                    video: { facingMode: state.activeCamera, width: { ideal: 1920 }, height: { ideal: 1080 } },
+                    audio: state.currentMode === 'VIDEO'
+                };
+                state.stream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = state.stream;
+                video.onloadedmetadata = () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    requestAnimationFrame(renderFrame);
+                };
+            } catch (err) {
+                showToast("Camera Permission Required", "alert-circle");
+            }
+        }
+
+        function renderFrame() {
+            if (!video.videoWidth) return;
+            ctx.filter = `brightness(${state.pro.brightness}%) contrast(${state.pro.contrast}%) saturate(${state.pro.saturate}%) hue-rotate(${state.pro.hue}deg) ${getFilterCSS()}`;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            if (state.zoom > 1) {
+                const w = canvas.width / state.zoom, h = canvas.height / state.zoom;
+                const x = (canvas.width - w) / 2, y = (canvas.height - h) / 2;
+                ctx.drawImage(canvas, x, y, w, h, 0, 0, canvas.width, canvas.height);
+            }
+            frameCount++;
+            const now = performance.now();
+            if (now - lastTime >= 1000) {
+                document.getElementById('perf-monitor').innerText = `${frameCount} FPS`;
+                frameCount = 0;
+                lastTime = now;
+            }
+            requestAnimationFrame(renderFrame);
+        }
+
+        function getFilterCSS() {
+            switch(state.filter) {
+                case 'vivid': return 'saturate(180%) contrast(110%)';
+                case 'noir': return 'grayscale(100%) contrast(120%)';
+                case 'sepia': return 'sepia(80%) contrast(90%) brightness(110%)';
+                case 'cyber': return 'hue-rotate(280deg) saturate(200%)';
+                case 'retro': return 'sepia(30%) contrast(110%) saturate(80%)';
+                default: return '';
+            }
+        }
+
+        // --- GEMINI API INTEGRATIONS ---
+
+        async function analyzeScene() {
+            const btn = document.getElementById('ai-analyze-btn');
+            const originalContent = btn.innerHTML;
+            btn.innerHTML = `<span class="loader"></span>`;
+            
+            try {
+                const imageData = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
+                const prompt = "Analyze this camera frame. Suggest one brief (10-15 words) creative advice for a photographer, focusing on lighting or composition. Also, suggest values for brightness, contrast, and saturation in JSON format: {advice: string, brightness: number, contrast: number, saturation: number}. Values should be between -50 and 50 relative to current defaults.";
+
+                const response = await geminiCall("gemini-2.5-flash-preview-09-2025", {
+                    contents: [{
+                        parts: [
+                            { text: prompt },
+                            { inlineData: { mimeType: "image/jpeg", data: imageData } }
+                        ]
+                    }],
+                    generationConfig: { responseMimeType: "application/json" }
+                });
+
+                const result = JSON.parse(response.candidates[0].content.parts[0].text);
+                
+                // Show recommendation
+                const suggestBox = document.getElementById('ai-suggestions');
+                document.getElementById('ai-suggestion-text').innerText = result.advice;
+                suggestBox.classList.remove('opacity-0');
+                setTimeout(() => suggestBox.classList.add('opacity-0'), 6000);
+
+                // Auto-apply settings
+                updatePro('brightness', result.brightness);
+                updatePro('contrast', result.contrast);
+                updatePro('saturate', result.saturation);
+                
+                showToast("✨ AI settings applied", "sparkles");
+            } catch (err) {
+                showToast("AI analysis failed", "cloud-off");
+            } finally {
+                btn.innerHTML = originalContent;
+                refreshIcons();
+            }
+        }
+
+        async function remixPhoto() {
+            if (!state.lastPhoto) {
+                showToast("Take a photo first", "camera");
+                return;
+            }
+
+            showToast("✨ AI Remixing...", "sparkles");
+            
+            try {
+                const base64Image = state.lastPhoto.split(',')[1];
+                const prompt = "Re-imagine this photo as a futuristic cyberpunk digital painting with neon lights and high contrast.";
+                
+                const response = await geminiCall("gemini-2.5-flash-image-preview", {
+                    contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64Image } }] }],
+                    generationConfig: { responseModalities: ['IMAGE'] }
+                });
+
+                const newImageData = response.candidates[0].content.parts.find(p => p.inlineData)?.inlineData?.data;
+                if (newImageData) {
+                    const fullData = `data:image/png;base64,${newImageData}`;
+                    saveToGallery(fullData, 'REMIX');
+                    showToast("✨ Remix complete!", "check");
+                }
+            } catch (err) {
+                showToast("Remixing failed", "alert-triangle");
+            }
+        }
+
+        async function geminiCall(model, payload, retries = 5) {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    if (res.ok) return await res.json();
+                    await new Promise(r => setTimeout(r, Math.pow(2, i) * 1000));
+                } catch (e) {
+                    if (i === retries - 1) throw e;
+                }
+            }
+        }
+
+        // --- CAPTURE & UI ---
+
+        function handleCapture() {
+            if (state.currentMode === 'VIDEO') toggleRecording();
+            else takePhoto();
+        }
+
+        function takePhoto() {
+            if (state.timer > 0) {
+                showToast(`Timer: ${state.timer}s`, 'clock');
+                setTimeout(executePhoto, state.timer * 1000);
+            } else {
+                executePhoto();
+            }
+        }
+
+        function executePhoto() {
+            const flash = document.getElementById('shutter-flash');
+            flash.style.animation = 'flash 0.3s ease-out';
+            setTimeout(() => flash.style.animation = '', 300);
+
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+            state.lastPhoto = dataUrl;
+            saveToGallery(dataUrl, 'PHOTO');
+            showToast("Photo Saved", "check");
+            shutterInner.style.transform = 'scale(0.8)';
+            setTimeout(() => shutterInner.style.transform = 'scale(1)', 100);
+        }
+
+        function startRecording() {
+            recordedChunks = [];
+            const stream = canvas.captureStream(30);
+            mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8' });
+            mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                saveToGallery(URL.createObjectURL(blob), 'VIDEO');
+                showToast("Video Saved", "video");
+            };
+            mediaRecorder.start();
+            state.isRecording = true;
+            startTime = Date.now();
+            updateRecUI();
+            document.getElementById('rec-status').classList.remove('hidden');
+            shutterInner.classList.replace('rounded-full', 'rounded-lg');
+            shutterInner.style.background = '#ff3b30';
+            shutterInner.style.width = '30px'; shutterInner.style.height = '30px';
+        }
+
+        function toggleRecording() {
+            if (!state.isRecording) startRecording();
+            else {
+                mediaRecorder.stop();
+                state.isRecording = false;
+                document.getElementById('rec-status').classList.add('hidden');
+                shutterInner.classList.replace('rounded-lg', 'rounded-full');
+                shutterInner.style.background = 'white';
+                shutterInner.style.width = '60px'; shutterInner.style.height = '60px';
+            }
+        }
+
+        function updateRecUI() {
+            if (!state.isRecording) return;
+            const elapsed = Math.floor((Date.now() - startTime) / 1000);
+            document.getElementById('rec-time').innerText = `${Math.floor(elapsed/60).toString().padStart(2,'0')}:${(elapsed%60).toString().padStart(2,'0')}`;
+            setTimeout(updateRecUI, 1000);
+        }
+
+        function setMode(mode) {
+            state.currentMode = mode;
+            ['photo', 'video', 'pro'].forEach(m => {
+                const el = document.getElementById(`mode-${m}`);
+                if (el) el.className = m.toUpperCase() === mode ? 'mode-active' : 'mode-inactive';
+            });
+            if (mode === 'PRO') togglePanel('pro-settings');
+            else document.getElementById('pro-settings').classList.add('translate-y-full');
+            showToast(`Mode: ${mode}`);
+            initCamera(); 
+        }
+
+        function setFilter(f) { state.filter = f; showToast(`Filter: ${f.toUpperCase()}`); }
+        function switchCamera() { state.activeCamera = state.activeCamera === 'user' ? 'environment' : 'user'; initCamera(); }
+
+        function updatePro(key, val) {
+            const numVal = parseInt(val);
+            if (['brightness', 'contrast', 'saturate'].includes(key)) state.pro[key] = 100 + numVal;
+            else state.pro[key] = numVal;
+            
+            const span = document.getElementById(`val-${key}`);
+            if (span) span.innerText = val;
+            const slider = document.getElementById(`slider-${key}`);
+            if (slider) slider.value = val;
+        }
+
+        function resetPro() {
+            state.pro = { brightness: 100, contrast: 100, saturate: 100, hue: 0 };
+            ['brightness', 'contrast', 'saturate', 'hue'].forEach(k => updatePro(k, 0));
+        }
+
+        function toggleSetting(type) {
+            if (type === 'grid') {
+                state.grid = !state.grid;
+                document.getElementById('grid-overlay').classList.toggle('hidden');
+            } else if (type === 'timer') {
+                const sequence = [0, 3, 5, 10];
+                state.timer = sequence[(sequence.indexOf(state.timer) + 1) % sequence.length];
+                document.getElementById('timer-btn').innerHTML = state.timer > 0 ? `<span class="text-[10px] font-bold">${state.timer}S</span>` : `<i data-lucide="timer" class="w-5 h-5"></i>`;
+                refreshIcons();
+            }
+        }
+
+        function togglePanel(id) { document.getElementById(id).classList.toggle('translate-y-full'); }
+
+        function showToast(msg, icon = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = 'glass px-6 py-2 rounded-full mb-2 flex items-center gap-3 ios-toast text-sm shadow-2xl';
+            toast.innerHTML = `<i data-lucide="${icon}" class="w-4 h-4"></i><span>${msg}</span>`;
+            container.appendChild(toast);
+            refreshIcons();
+            setTimeout(() => toast.remove(), 2500);
+        }
+
+        document.getElementById('zoom-range').oninput = (e) => {
+            state.zoom = parseFloat(e.target.value);
+            document.getElementById('zoom-track').style.height = `${((state.zoom - 1) / 2) * 100}%`;
+            document.getElementById('zoom-label').innerText = `${state.zoom.toFixed(1)}X`;
+        };
+
+        function saveToGallery(data, type) {
+            document.getElementById('gallery-preview').innerHTML = `<img src="${data}" class="w-full h-full object-cover scale-110">`;
+            const link = document.createElement('a');
+            link.download = `Lumina_${Date.now()}.${type === 'PHOTO' || type === 'REMIX' ? 'jpg' : 'webm'}`;
+            link.href = data;
+            link.click();
+        }
+
+        function openGallery() { showToast("Gallery Coming Soon", "image"); }
+
+        window.addEventListener('load', () => {
+            setInterval(() => { if (typeof lucide !== 'undefined') { refreshIcons(); } }, 500);
+            initCamera();
+        });
+    </script>
+</body>
+</html>
